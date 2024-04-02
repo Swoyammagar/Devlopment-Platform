@@ -4,8 +4,9 @@ const path = require('path');
 const bodyParser = require('body-parser');
 const jwt = require('jsonwebtoken');
 const cookieParser = require('cookie-parser'); 
-
+const bcrypt = require('bcrypt')
 const app = express();
+const { MongoClient } = require('mongodb');
 
 // Serve static files from the 'dev' directory
 app.use(express.static('dev'));
@@ -19,39 +20,72 @@ app.use(cookieParser()); // Use cookie parser middleware
 
 // JWT secret key
 const JWT_SECRET = 'magar'; 
-const users = [];
+const dbname = 'mydatabase';
+const url = 'mongodb://localhost:27017';
 
-app.post('/signup', (req, res) => {
+// MongoDB connection
+const client=new MongoClient(url, {useUnifiedTopology: true})
+
+// Checking connection
+client.connect(err=>{
+    if (err){
+        console.log("Error connecting to the database", err);
+        return;
+    }
+    else{
+        console.log("Connection sucessful");
+        // Creating the database if it does not exist
+        const db =  client.db(dbname);
+    }
+})
+
+app.post('/signup', async   (req, res) => {
     const email = req.body.email;
     const password = req.body.password;
 
     if (email && password) {
-        const checkUser = users.find(userData => userData.email === email);
+        const db = client.db(dbname);
+        const collection = db.collection("users");
+        const hashPassword = await bcrypt.hash(password,10);
 
-        if (checkUser) {
+        const user = await collection.findOne({email});
+
+        if (user) {
             res.send('Email already in use');
         } else {
-            users.push({ email, password });
+            await collection.insertOne({email, password:hashPassword});
             console.log('User signed up:', email); 
-                
-            res.sendFile(path.join(__dirname, 'dev', 'login.html'));        }
+            // Generate JWT token
+            const token = jwt.sign({ email }, JWT_SECRET, { expiresIn: "1h"  });
+            res.cookie('token', token, { httpOnly: true });
+            res.redirect('/protected-route');        }
     } else {
         res.status(400).send('Please fill in all details.'); 
     }
 });
 
-app.post('/login', (req, res) => {
+app.post('/login', async (req, res) => {
     const email = req.body.email;
     const password = req.body.password;
 
     if (email && password) {
-        const user = users.find(userData => userData.email === email && userData.password === password);
+        const db= client.db(dbname);
+        const collection = db.collection("users");
+
+        const user = await collection.findOne({ email });
 
         if (user) {
-            // Generate JWT token
-            const token = jwt.sign({ email: user.email }, JWT_SECRET, { expiresIn: "1h"  });
-            res.cookie('token', token, { httpOnly: true });
-            res.redirect('/protected-route');
+            const comparePassword= await bcrypt.compare(password,user.password);
+
+            if(comparePassword){
+                // Generate JWT token
+                const token = jwt.sign({ email: user.email }, JWT_SECRET, { expiresIn: "1h"  });
+                res.cookie('token', token, { httpOnly: true });
+                res.redirect('/protected-route');
+            }
+            else{
+                res.status(401).send('Invalid email or password. Please try again.');
+            }
         } else {
             res.status(401).send('Invalid email or password. Please try again.');
         }
